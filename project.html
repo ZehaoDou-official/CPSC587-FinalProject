@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>CPSC 487/587</title>
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.1/dist/lil-gui.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/10.3.0/math.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/quaternion@1.5.1/quaternion.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/numeric@1.2.6/numeric-1.2.6.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/stats.js@0.17.0/build/stats.min.js"></script>
+    <script type="importmap">
+        {
+            "imports": {
+              "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+              "three/": "https://unpkg.com/three@0.160.0/"
+            }
+        }
+    </script>
+</head>
+<body>
+<script type="module">
+    import {ThreeEngine, get_default_lil_gui, refresh_displays} from "./js/utils/utils_three.js";
+    import {B1Z1Robot} from "./js/utils/utils_robot.js";
+    import {identity_matrix, mul_matrix_matrix, mul_matrix_scalar, add_matrix_matrix,
+        sub_matrix_matrix, transpose} from "./js/utils/utils_math.js";
+
+    let engine = ThreeEngine.new_default_3d();
+    let robot = new B1Z1Robot();
+    let robot2 = new B1Z1Robot();
+    robot.spawn_robot(engine);
+    robot2.spawn_robot(engine);
+
+    let gui = get_default_lil_gui();
+
+    let settings = {
+        ball_x: 3.0,
+        ball_y: 2.0,
+        ball_z: 5.0,
+        ball_vx: 0.0,
+        ball_vy: 0.0,
+        ball_vz: 0.0,
+        g: 24.5,
+        dog1_left_leg_angle: 0.0,
+        dog1_left: true,
+        dog2_left_leg_angle: 0.0,
+        dog2_left: true,
+    };
+
+    let actions = {
+        reset_ball_left: function(){
+            settings.ball_x = 3.0;
+            settings.ball_y = 2.0;
+            settings.ball_z = 5.0;
+            settings.ball_vx = 0.0;
+            settings.ball_vy = 0.0;
+            settings.ball_vz = 0.0;
+            settings.g = 24.5;
+        },
+
+        reset_ball_right: function(){
+            settings.ball_x = 3.0;
+            settings.ball_y = -2.0;
+            settings.ball_z = 5.0;
+            settings.ball_vx = 0.0;
+            settings.ball_vy = 0.0;
+            settings.ball_vz = 0.0;
+            settings.g = 24.5;
+        },
+
+        Earth: function(){
+            settings.g = 9.8;
+        },
+
+        Jupiter: function(){
+            settings.g = 24.5;
+        },
+
+        Moon: function(){
+            settings.g = 1.6;
+        },
+
+        Mars: function(){
+            settings.g = 3.7;
+        },
+
+        Venus: function(){
+            settings.g = 8.87;
+        }
+    };
+
+    let folder1 = gui.addFolder('Planets');
+    folder1.add(actions, 'Earth').name('Earth');
+    folder1.add(actions, 'Jupiter').name('Jupiter');
+    folder1.add(actions, 'Moon').name('Moon');
+    folder1.add(actions, 'Mars').name('Mars');
+    folder1.add(actions, 'Venus').name('Venus');
+    folder1.add(settings, 'g').name('Gravity').disable();
+    folder1.add(actions, 'reset_ball_left').name('Reset Ball Left');
+    folder1.add(actions, 'reset_ball_right').name('Reset Ball Right');
+
+
+    let links = robot.links;
+    let joints = robot.joints;
+    let kh = robot.kinematic_hierarchy;
+    let links2 = robot2.links;
+    let joints2 = robot2.joints;
+    let kh2 = robot2.kinematic_hierarchy;
+
+    let num_DoFs = 0;
+    joints.forEach(joint => num_DoFs += joint.joint_num_dofs);
+
+    let state = Array(num_DoFs).fill(0.0);
+    state[5] = 0.670; state[4] = -2.0; state[3] = 3.0;
+
+    let state2 = Array(num_DoFs).fill(0.0);
+    state2[5] = 0.670; state2[4] = 2.0; state2[3] = 3.0;
+
+
+    let output_poses = [];
+    for (let i = 0; i < links.length; i++){
+        output_poses.push(identity_matrix(4));
+    }
+
+    let output_poses2 = output_poses;
+
+    let ball_radius = 0.2;
+    let dog_speed = 3.2;
+    let dog_radius = 0.8;
+
+    engine.animation_loop(()  => {
+        engine.draw_debug_plane([3, 0, 0], [1, 0, 0], [0, 1, 0], 3.0, 6.0, 0x0000ff, 1.0);
+        engine.draw_debug_plane([3, 6, 3], [0, 0, 1], [1, 0, 0], 3.0, 6.0, 0xd9b9d4, 0.2);
+        engine.draw_debug_plane([3, -6, 3], [0, 0, 1], [1, 0, 0], 3.0, 3.0, 0xd9b9d4, 0.2);
+        engine.draw_debug_plane([6, 0, 3], [0, 0, 1], [0, 1, 0], 3.0, 6.0, 0xd9b9d4, 0.7);
+        engine.draw_debug_plane([3, 0, 6], [1, 0, 0], [0, 1, 0], 3.0, 6.0, 0xd9b9d4, 0.7);
+        engine.draw_debug_plane([0, 0, 3], [0, 0, 1], [0, 1, 0], 3.0, 6.0, 0xd9b9d4, 0.7);
+
+        let pred = prediction();
+        if (pred[2] < -dog_radius) {
+            adjust_dog2_status(pred);
+            idle_dog1_status();
+        } else if (pred[2] > dog_radius) {
+            adjust_dog1_status(pred);
+            idle_dog2_status();
+        }
+
+        forward_kinematics(state);
+        forward_kinematics2(state2);
+        ball_next_state();
+
+        refresh_displays(gui);
+    });
+
+    function ball_next_state() {
+        let Delta_t = 1.0 / 60;
+        let next_x = settings.ball_x + Delta_t * settings.ball_vx;
+        let next_y = settings.ball_y + Delta_t * settings.ball_vy;
+        let next_z = settings.ball_z + Delta_t * settings.ball_vz;
+        settings.ball_x = next_x;
+        settings.ball_y = next_y;
+        settings.ball_z = next_z;
+        if (next_y < -6.0 + ball_radius) {
+            actions.reset_ball_left();
+        } else if (next_y > 6.0 - ball_radius) {
+            actions.reset_ball_right();
+        } else {
+            if (next_x > 6.0 - ball_radius) {
+                settings.ball_vx = -settings.ball_vx;
+                settings.ball_x = 6.0 - ball_radius;
+            }
+
+            if (next_x < ball_radius) {
+                settings.ball_vx = -settings.ball_vx;
+                settings.ball_x = ball_radius;
+            }
+
+            if (Math.abs(next_z) >= 6.0 - ball_radius) {
+                settings.ball_vz = -settings.ball_vz;
+                settings.ball_z = 6.0 - ball_radius;
+            } else if (Math.abs(next_z) <= ball_radius) {
+                settings.ball_vz = -settings.ball_vz;
+                settings.ball_z = ball_radius + 0.001;
+                settings.ball_vz *= 0.95;
+            }
+
+            settings.ball_vz -= settings.g * Delta_t;
+            engine.draw_debug_sphere([settings.ball_x, settings.ball_y, settings.ball_z], ball_radius, 0xffc0cb, 1.0);
+        }
+    }
+
+    function prediction(){
+        let fall_time = (settings.ball_vz + Math.sqrt(settings.ball_vz ** 2 + 2 * settings.g * settings.ball_z)) / settings.g;
+        let pos_x = settings.ball_x + fall_time * settings.ball_vx;
+        let pos_y = settings.ball_y + fall_time * settings.ball_vy;
+
+        return [fall_time, pos_x, pos_y];
+    }
+
+    function dog1_stand_still(){
+        for (let i = 0; i < 4; i++){state[7+3*i] = 0.0; state[8+3*i] = -0.6;}
+        settings.dog1_left_leg_angle = 0.0;
+        settings.dog1_left = true;
+    }
+
+    function dog2_stand_still(){
+        for (let i = 0; i < 4; i++){state2[7+3*i] = 0.0; state2[8+3*i] = -0.6;}
+        settings.dog2_left_leg_angle = 0.0;
+        settings.dog2_left = true;
+    }
+
+    function idle_dog1_status(){
+        dog1_sit_down();
+        state[2] = -Math.PI / 2;
+    }
+
+    function idle_dog2_status(){
+        dog2_sit_down();
+        state2[2] = Math.PI / 2;
+    }
+
+    function dog1_sit_down(){
+        state[0] = 0.0; state[1] = 0.0; state[5] = 0.670; state[8] = -0.6; state[11] = -0.6;
+    }
+
+    function dog2_sit_down(){
+        state2[0] = 0.0; state2[1] = 0.0; state2[5] = 0.670; state2[8] = -0.6; state2[11] = -0.6;
+    }
+
+    function dog1_stand_up(angle){
+        state[8] = -1.5; state[11] = -1.5;
+        state[5] = 0.75;
+        let T1 = exp_SO3(angle, [0,0,1]);
+        let T2 = exp_SO3(0.8, [Math.sin(angle), -Math.cos(angle), 0]);
+        let T = mul_matrix_matrix(T2, T1);
+        let R = log_SO3(T);
+        state[0] = R[2][1];
+        state[1] = R[0][2];
+        state[2] = R[1][0];
+    }
+
+    function dog2_stand_up(angle){
+        state2[8] = -1.5; state2[11] = -1.5;
+        state2[5] = 0.75;
+        let T1 = exp_SO3(angle, [0,0,1]);
+        let T2 = exp_SO3(0.8, [Math.sin(angle), -Math.cos(angle), 0]);
+        let T = mul_matrix_matrix(T2, T1);
+        let R = log_SO3(T);
+        state2[0] = R[2][1];
+        state2[1] = R[0][2];
+        state2[2] = R[1][0];
+    }
+
+    function dog1_walk(){
+        if (settings.dog1_left) {
+            settings.dog1_left_leg_angle -= 1.0 / 12;
+            if (settings.dog1_left_leg_angle < -Math.PI / 6) {
+                settings.dog1_left = false;
+            }
+            state[11] = -0.6; state[17] = -0.6;
+            state[8] = -1.5; state[14] = -1.5;
+        } else {
+            settings.dog1_left_leg_angle += 1.0 / 12;
+            if (settings.dog1_left_leg_angle > Math.PI / 6) {
+                settings.dog1_left = true;
+            }
+            state[11] = -1.5; state[17] = -1.5;
+            state[8] = -0.6; state[14] = -0.6;
+        }
+        state[10] = -settings.dog1_left_leg_angle; state[16] = -settings.dog1_left_leg_angle;
+        state[7] = settings.dog1_left_leg_angle; state[13] = settings.dog1_left_leg_angle;
+    }
+
+    function dog2_walk() {
+        if (settings.dog2_left) {
+            settings.dog2_left_leg_angle -= 1.0 / 12;
+            if (settings.dog2_left_leg_angle < -Math.PI / 6) {
+                settings.dog2_left = false;
+            }
+            state2[11] = -0.6; state2[17] = -0.6;
+            state2[8] = -1.5; state2[14] = -1.5;
+        } else {
+            settings.dog2_left_leg_angle += 1.0 / 12;
+            if (settings.dog2_left_leg_angle > Math.PI / 6) {
+                settings.dog2_left = true;
+            }
+            state2[11] = -1.5; state2[17] = -1.5;
+            state2[8] = -0.6; state2[14] = -0.6;
+        }
+        state2[10] = -settings.dog2_left_leg_angle; state2[16] = -settings.dog2_left_leg_angle;
+        state2[7] = settings.dog2_left_leg_angle; state2[13] = settings.dog2_left_leg_angle;
+    }
+
+    function adjust_dog1_status(pred){
+        let Delta_t = 1.0 / 60;
+        let dis = Math.sqrt((pred[1] - state[3]) ** 2 + (pred[2] - state[4]) ** 2);
+        let angle = Math.atan2(pred[2] - state[4], pred[1] - state[3]);
+        if (dis <= dog_speed * Delta_t) {
+            state[3] = pred[1];
+            state[4] = pred[2];
+            dog1_stand_still();
+            if (settings.ball_z < 1.2) {
+                settings.ball_z = 1.2;
+                settings.ball_vz = 10.0;
+                let ball_theta = (Math.random() - 2.0) * Math.PI / 3.0;
+                let v = Math.random() + 2.0;
+                settings.ball_vx = v * Math.cos(ball_theta);
+                settings.ball_vy = v * Math.sin(ball_theta);
+                dog1_sit_down();
+            } else { if (pred[0] < 0.3) {dog1_stand_up(-Math.PI / 2);}
+            }
+        } else {
+            state[2] = angle;
+            let next_x = state[3] + dog_speed * Math.cos(angle) * Delta_t;
+            let next_y = state[4] + dog_speed * Math.sin(angle) * Delta_t;
+            // let dis_dogs = Math.sqrt((next_x - state2[3]) ** 2 + (next_y - state2[4]) ** 2);
+            if (next_x < dog_radius) {
+                next_x = dog_radius;
+            } else if (next_x > 6.0 - dog_radius) {
+                next_x = 6.0 - dog_radius;
+            }
+
+            if (next_y > 6.0 - dog_radius) {
+                next_y = 6.0 - dog_radius;
+            } else if (next_y < dog_radius) {
+                next_y = dog_radius;
+            }
+
+            state[3] = next_x;
+            state[4] = next_y;
+            dog1_walk();
+        }
+    }
+
+    function adjust_dog2_status(pred){
+        let Delta_t = 1.0 / 60;
+        let dis = Math.sqrt((pred[1] - state2[3]) ** 2 + (pred[2] - state2[4]) ** 2);
+        let angle = Math.atan2(pred[2] - state2[4], pred[1] - state2[3]);
+        if (dis <= dog_speed * Delta_t) {
+            state2[3] = pred[1];
+            state2[4] = pred[2];
+            dog2_stand_still();
+            if (settings.ball_z < 1.2) {
+                settings.ball_z = 1.2;
+                settings.ball_vz = 10.0;
+                let ball_theta = (Math.random() + 1.0) * Math.PI / 3.0;
+                let v = Math.random() + 2.0;
+                settings.ball_vx = v * Math.cos(ball_theta);
+                settings.ball_vy = v * Math.sin(ball_theta);
+                dog2_sit_down();
+            } else { if (pred[0] < 0.3) {dog2_stand_up(Math.PI / 2);}
+            }
+        } else {
+            state2[2] = angle;
+            let next_x = state2[3] + dog_speed * Math.cos(angle) * Delta_t;
+            let next_y = state2[4] + dog_speed * Math.sin(angle) * Delta_t;
+            // let dis_dogs = Math.sqrt((next_x - state[3]) ** 2 + (next_y - state[4]) ** 2);
+            if (next_x < dog_radius) {
+                next_x = dog_radius;
+            } else if (next_x > 6.0 - dog_radius) {
+                next_x = 6.0 - dog_radius;
+            }
+
+            if (next_y < -6.0 + dog_radius) {
+                next_y = -6.0 + dog_radius;
+            } else if (next_y > -dog_radius) {
+                next_y = -dog_radius;
+            }
+            state2[3] = next_x;
+            state2[4] = next_y;
+            dog2_walk();
+        }
+    }
+
+    function forward_kinematics(state){
+        kh.forEach(layer => {
+            layer.forEach(link_idx => {
+                if (link_idx > 0) {
+                    let curr_link = links[link_idx];
+                    let parent_link_idx = curr_link.parent_link_idx;
+                    let parent_joint_idx = curr_link.parent_joint_idx;
+                    let curr_joint = joints[parent_joint_idx];
+                    let joint_type = curr_joint.joint_type_string;
+
+                    let curr_pose = output_poses[parent_link_idx];
+                    let T_c = curr_joint.xyz_rpy_SE3_matrix;
+                    curr_pose = mul_matrix_matrix(curr_pose, T_c);
+
+                    let T_v;
+                    if (joint_type === 'revolute') {
+                        let joint_value = state[curr_joint.dof_idx];
+                        let joint_axis = curr_joint.axis;
+                        T_v = SE3(exp_SO3(joint_value, joint_axis), [0, 0, 0]);
+                    } else if (joint_type === 'prismatic') {
+                        let joint_value = state[curr_joint.dof_idx];
+                        let joint_axis = curr_joint.axis;
+                        let transport = [joint_value * joint_axis[0], joint_value * joint_axis[1], joint_value * joint_axis[2]];
+                        T_v = SE3(identity_matrix(3), transport);
+                    } else if (joint_type === 'floating') {
+                        let rd = curr_joint.rotation_dof_idxs;
+                        let td = curr_joint.translation_dof_idxs;
+
+                        let rv = [state[rd[0]], state[rd[1]], state[rd[2]]];
+                        let tv = [state[td[0]], state[td[1]], state[td[2]]];
+                        T_v = SE3(exp_SO3(1.0, rv), tv);
+                    } else if (joint_type === 'fixed') {
+                        T_v = identity_matrix(4);
+                    }
+
+                    curr_pose = mul_matrix_matrix(curr_pose, T_v);
+
+                    output_poses[link_idx] = curr_pose;
+                    robot.set_link_mesh_pose_from_SE3_matrix(engine, link_idx, curr_pose);
+                }
+            });
+        });
+
+        return output_poses;
+    }
+
+    function forward_kinematics2(state){
+        kh2.forEach(layer => {
+            layer.forEach(link_idx => {
+                if (link_idx > 0) {
+                    let curr_link = links2[link_idx];
+                    let parent_link_idx = curr_link.parent_link_idx;
+                    let parent_joint_idx = curr_link.parent_joint_idx;
+                    let curr_joint = joints2[parent_joint_idx];
+                    let joint_type = curr_joint.joint_type_string;
+
+                    let curr_pose = output_poses2[parent_link_idx];
+                    let T_c = curr_joint.xyz_rpy_SE3_matrix;
+                    curr_pose = mul_matrix_matrix(curr_pose, T_c);
+
+                    let T_v;
+                    if (joint_type === 'revolute') {
+                        let joint_value = state[curr_joint.dof_idx];
+                        let joint_axis = curr_joint.axis;
+                        T_v = SE3(exp_SO3(joint_value, joint_axis), [0, 0, 0]);
+                    } else if (joint_type === 'prismatic') {
+                        let joint_value = state[curr_joint.dof_idx];
+                        let joint_axis = curr_joint.axis;
+                        let transport = [joint_value * joint_axis[0], joint_value * joint_axis[1], joint_value * joint_axis[2]];
+                        T_v = SE3(identity_matrix(3), transport);
+                    } else if (joint_type === 'floating') {
+                        let rd = curr_joint.rotation_dof_idxs;
+                        let td = curr_joint.translation_dof_idxs;
+
+                        let rv = [state[rd[0]], state[rd[1]], state[rd[2]]];
+                        let tv = [state[td[0]], state[td[1]], state[td[2]]];
+                        T_v = SE3(exp_SO3(1.0, rv), tv);
+                    } else if (joint_type === 'fixed') {
+                        T_v = identity_matrix(4);
+                    }
+
+                    curr_pose = mul_matrix_matrix(curr_pose, T_v);
+
+                    output_poses2[link_idx] = curr_pose;
+                    robot2.set_link_mesh_pose_from_SE3_matrix(engine, link_idx, curr_pose);
+                }
+            });
+        });
+
+        return output_poses2;
+    }
+
+    function SE3(S, transport){
+        return [
+            [S[0][0], S[0][1], S[0][2], transport[0]],
+            [S[1][0], S[1][1], S[1][2], transport[1]],
+            [S[2][0], S[2][1], S[2][2], transport[2]],
+            [0,0,0,1]
+        ];
+    }
+
+    function exp_SO3(theta, axis){
+        let a = axis[0] * theta;
+        let b = axis[1] * theta;
+        let c = axis[2] * theta;
+        let M = [[0, -c, b], [c, 0, -a], [-b, a, 0]];
+        let beta = Math.sqrt(a * a + b * b + c * c);
+        let p, q;
+        if (Math.abs(beta) < 0.001){
+            p = 1 - beta ** 2 / 6.0 + beta ** 4 / 120.0;
+            q = 1 / 2.0 - beta ** 2 / 24.0 + beta ** 4 / 720.0;
+        } else {
+            p = Math.sin(beta) / beta;
+            q = (1.0 - Math.cos(beta)) / (beta ** 2);
+        }
+
+        let I1 = identity_matrix(3);
+        let I2 = mul_matrix_scalar(M, p);
+        let I3 = mul_matrix_scalar(mul_matrix_matrix(M, M), q);
+
+        return add_matrix_matrix(add_matrix_matrix(I1, I2), I3);
+    }
+
+    function log_SO3(R) {
+
+        let beta = Math.acos((R[0][0] + R[1][1] + R[2][2] - 1.0) / 2.0);
+        if (Math.abs(beta) < 0.001) {
+            let para = 0.5 + beta ** 2/ 12.0 + 7 * beta ** 4 / 720.0;
+            return mul_matrix_scalar(sub_matrix_matrix(R, transpose(R)), para);
+        } else {
+            if (beta === Math.PI) {
+                return [
+                    [0, -Math.PI * Math.sqrt((R[2][2]+1.0)/2.0), Math.PI * Math.sqrt((R[1][1]+1.0)/2.0)],
+                    [Math.PI * Math.sqrt((R[2][2]+1.0)/2.0), 0, -Math.PI * Math.sqrt((R[0][0]+1.0)/2.0)],
+                    [-Math.PI * Math.sqrt((R[1][1]+1.0)/2.0), Math.PI * Math.sqrt((R[0][0]+1.0)/2.0), 0]
+                ]
+            } else {
+                let para = beta / (2.0 * Math.sin(beta));
+                return mul_matrix_scalar(sub_matrix_matrix(R, transpose(R)), para);
+            }
+
+        }
+    }
+
+</script>
+</body>
+</html>
